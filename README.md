@@ -1,5 +1,7 @@
 # TalkaNova
 
+[![CI](https://github.com/Imadzakxy/TalkaNova/actions/workflows/ci.yml/badge.svg)](https://github.com/Imadzakxy/TalkaNova/actions)
+
 **TalkaNova** is a security-first E2EE messaging app: **Next.js** frontend and **Python FastAPI** backend.  
 Academic cybersecurity project: encrypted messaging, WebSocket chat, Google OAuth, password reset, private DMs, message reporting/deletion, email support, WebRTC demo, and Tor/Tailscale-friendly deployment.
 
