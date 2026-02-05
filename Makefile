@@ -3,16 +3,21 @@ VENV=.venv
 PYTHON=$(VENV)/bin/python
 NPM=npm --prefix frontend
 
-.PHONY: all setup start test build lint ci clean
+.PHONY: all install setup start test build lint ci clean
 
 all: ci
+
+# `install` is an idempotent, user-facing target that prepares the repo for development.
+# It creates the virtualenv if missing and installs backend and frontend dependencies.
+install: setup
+	@echo "[OK] install complete (venv + deps)"
 
 setup:
 	@echo "[INFO] Setting up virtualenv and installing backend deps..."
 	@if [ ! -d $(VENV) ]; then python -m venv $(VENV); fi
 	$(PYTHON) -m pip install --upgrade pip
 	$(PYTHON) -m pip install -r backend/requirements.txt
-	@if [ -d frontend ] && [ ! -d frontend/node_modules ]; then cd frontend && npm install; fi
+	@if [ -d frontend ] && [ ! -d frontend/node_modules ]; then cd frontend && npm ci; fi
 
 start:
 	@echo "[INFO] Start backend and frontend (dev mode)"
