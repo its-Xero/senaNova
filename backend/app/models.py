@@ -56,6 +56,46 @@ class KeyBundle(Base):
     
     user = relationship("User", back_populates="keys")
 
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id"), index=True, nullable=False)
+    token_hash = Column(String, unique=True, index=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    used = Column(Boolean, default=False)
+
+    user = relationship("User")
+
+
+class EmailConfirmationToken(Base):
+    __tablename__ = "email_confirmation_tokens"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id"), index=True, nullable=True)
+    pending_signup_id = Column(String, ForeignKey("pending_signups.id"), index=True, nullable=True)
+    token_hash = Column(String, unique=True, index=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    used = Column(Boolean, default=False)
+
+    user = relationship("User")
+    pending_signup = relationship("PendingSignup")
+
+
+class PendingSignup(Base):
+    __tablename__ = "pending_signups"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    email = Column(String, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    display_name = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    used = Column(Boolean, default=False)
+
 class MessageBlob(Base):
     """
     Stores Encrypted Message Blobs.

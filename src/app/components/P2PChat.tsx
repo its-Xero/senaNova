@@ -16,7 +16,7 @@ interface P2PChatProps {
 
 type CallMode = "none" | "audio" | "video";
 
-export default function P2PChat({ sessionId, onClose }: P2PChatProps) {
+export default function P2PChat({ sessionId, myUserId, onClose }: P2PChatProps) {
     const [messages, setMessages] = useState<{ sender: string; text: string; time: string }[]>([]);
     const [newMessage, setNewMessage] = useState("");
     const [status, setStatus] = useState("connecting");
@@ -29,6 +29,7 @@ export default function P2PChat({ sessionId, onClose }: P2PChatProps) {
 
     const pcRef = useRef<RTCPeerConnection | null>(null);
     const dcRef = useRef<RTCDataChannel | null>(null);
+    const pendingCandidatesRef = useRef<any[]>([]);
     const localStreamRef = useRef<MediaStream | null>(null);
     const localVideoRef = useRef<HTMLVideoElement>(null);
     const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -36,7 +37,7 @@ export default function P2PChat({ sessionId, onClose }: P2PChatProps) {
 
     // Initialize WebRTC
     useEffect(() => {
-        const pc = new RTCPeerConnection({
+            const pc = new RTCPeerConnection({
             iceServers: [
                 { urls: "stun:stun.l.google.com:19302" },
                 { urls: "stun:stun1.l.google.com:19302" }
@@ -46,7 +47,9 @@ export default function P2PChat({ sessionId, onClose }: P2PChatProps) {
 
         pc.onicecandidate = (event) => {
             if (event.candidate) {
-                sendP2PIceCandidate(sessionId, JSON.stringify(event.candidate));
+                // include sdpMid and sdpMLineIndex for complete reconstruction
+                const cand = event.candidate;
+                sendP2PIceCandidate(sessionId, JSON.stringify(cand), cand.sdpMid ?? null, cand.sdpMLineIndex ?? null);
             }
         };
 
@@ -71,32 +74,74 @@ export default function P2PChat({ sessionId, onClose }: P2PChatProps) {
             }
         };
 
+        const appliedCandidates = new Set<string>();
+
         // Poll signaling status
         pollInterval.current = setInterval(async () => {
             try {
                 const session = await getP2PSessionStatus(sessionId);
                 setPeerIp(session.peer_ip || null);
-
-                if (session.status === "connecting" && !session.sdp_offer && !dcRef.current) {
-                    const dc = pc.createDataChannel("chat");
-                    setupDataChannel(dc);
-
-                    const offer = await pc.createOffer();
-                    await pc.setLocalDescription(offer);
-                    await sendP2POffer(sessionId, JSON.stringify(offer));
+                // Apply remote ICE candidates (if any). If adding fails because
+                // remoteDescription is not set yet, queue them and retry later.
+                if (session.ice_candidates && session.ice_candidates.length > 0) {
+                    for (const c of session.ice_candidates) {
+                        try {
+                            const key = `${c.candidate}-${c.sdpMid}-${c.sdpMLineIndex}`;
+                            if (appliedCandidates.has(key)) continue;
+                            const candObj = JSON.parse(c.candidate);
+                            try {
+                                await pc.addIceCandidate(new RTCIceCandidate(candObj));
+                                appliedCandidates.add(key);
+                            } catch (err) {
+                                // Queue candidate to retry later
+                                pendingCandidatesRef.current.push({ key, candObj });
+                            }
+                        } catch (err) {
+                            console.debug("Failed to process remote ICE candidate", err);
+                        }
+                    }
                 }
 
-                if (session.sdp_offer && !pc.currentLocalDescription && !session.sdp_answer) {
-                    const offer = JSON.parse(session.sdp_offer.sdp);
-                    await pc.setRemoteDescription(offer);
-                    const answer = await pc.createAnswer();
-                    await pc.setLocalDescription(answer);
-                    await sendP2PAnswer(sessionId, JSON.stringify(answer));
+                // Retry any pending candidates
+                if (pendingCandidatesRef.current.length > 0) {
+                    const remaining: any[] = [];
+                    for (const item of pendingCandidatesRef.current) {
+                        try {
+                            await pc.addIceCandidate(new RTCIceCandidate(item.candObj));
+                            appliedCandidates.add(item.key);
+                        } catch (err) {
+                            remaining.push(item);
+                        }
+                    }
+                    pendingCandidatesRef.current = remaining;
                 }
 
-                if (session.sdp_answer && pc.currentLocalDescription && !pc.currentRemoteDescription) {
-                    const answer = JSON.parse(session.sdp_answer.sdp);
-                    await pc.setRemoteDescription(answer);
+                const isInitiator = session.initiator_id === myUserId;
+
+                // Initiator: create data channel + offer when needed, apply remote answer when available
+                if (isInitiator) {
+                    if (session.status === "connecting" && !session.sdp_offer && !dcRef.current) {
+                        const dc = pc.createDataChannel("chat");
+                        setupDataChannel(dc);
+
+                        const offer = await pc.createOffer();
+                        await pc.setLocalDescription(offer as any);
+                        await sendP2POffer(sessionId, JSON.stringify(offer));
+                    }
+
+                    if (session.sdp_answer && pc.localDescription && !pc.remoteDescription) {
+                        const answer = JSON.parse(session.sdp_answer.sdp);
+                        await pc.setRemoteDescription(answer as any);
+                    }
+                } else {
+                    // Callee: apply remote offer and create/send answer
+                    if (session.sdp_offer && !pc.remoteDescription) {
+                        const offer = JSON.parse(session.sdp_offer.sdp);
+                        await pc.setRemoteDescription(offer as any);
+                        const answer = await pc.createAnswer();
+                        await pc.setLocalDescription(answer as any);
+                        await sendP2PAnswer(sessionId, JSON.stringify(answer));
+                    }
                 }
             } catch (e) {
                 console.error("Signaling poll error", e);

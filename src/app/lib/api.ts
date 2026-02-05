@@ -9,6 +9,81 @@ export function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
+// ========== Auth Endpoints (JWT) ==========
+
+export interface TokenResponse {
+  access_token: string;
+  expires_in: number;
+  refresh_token: string;
+}
+
+export async function signup(email: string, password: string, display_name?: string): Promise<{ok: boolean; message?: string}> {
+  const res = await fetch(apiUrl(`/api/v1/auth/signup`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, display_name }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Signup failed");
+  }
+  return res.json();
+}
+
+export async function login(email: string, password: string): Promise<TokenResponse> {
+  const res = await fetch(apiUrl(`/api/v1/auth/login`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) throw new Error("Login failed");
+  return res.json();
+}
+
+export async function forgotPassword(email: string): Promise<{ok: boolean}> {
+  const res = await fetch(apiUrl(`/api/v1/auth/forgot`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) throw new Error("Request failed");
+  return res.json();
+}
+
+export async function resetPassword(token: string, new_password: string): Promise<{ok: boolean}> {
+  const res = await fetch(apiUrl(`/api/v1/auth/reset`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, new_password }),
+  });
+  if (!res.ok) throw new Error("Reset failed");
+  return res.json();
+}
+
+export async function authMe(): Promise<{id: string; email: string; display_name?: string}> {
+  // Requires Authorization header; consumer must set it when available.
+  // This helper will attempt to read `access_token` from localStorage if present.
+  const token = typeof window !== "undefined" ? localStorage.getItem("talkanova_access_token") : null;
+  const headers: Record<string,string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(apiUrl(`/api/v1/auth/me`), { headers });
+  if (!res.ok) throw new Error("Not authenticated");
+  return res.json();
+}
+
+export async function confirmEmail(token: string): Promise<TokenResponse> {
+  const res = await fetch(apiUrl(`/api/v1/auth/confirm`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Confirm failed");
+  }
+  return res.json();
+}
+
 // ========== Ephemeral Identity ==========
 
 const IDENTITY_KEY = "talkanova_identity";
@@ -132,6 +207,10 @@ export interface Room {
 
 export async function getRooms(): Promise<Room[]> {
   return request<Room[]>("/api/v1/rooms");
+}
+
+export async function getRoomMembers(roomId: string): Promise<{user_id: string; user_name?: string}[]> {
+  return request<{user_id: string; user_name?: string}[]>(`/api/v1/rooms/${roomId}/members`);
 }
 
 export async function createRoom(name: string, code: string): Promise<Room> {

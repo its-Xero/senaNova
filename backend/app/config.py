@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60
     refresh_token_expire_days: int = 7
     password_reset_expire_minutes: int = 30
+    email_confirmation_expire_minutes: int = 60
     bcrypt_rounds: int = 12
 
     # CORS (comma-separated origins; * for dev only)
@@ -39,6 +40,10 @@ class Settings(BaseSettings):
     google_redirect_uri: str = Field(
         default="http://localhost:3000/auth/callback",
         description="Frontend callback URL",
+    )
+    google_backend_callback: str = Field(
+        default="http://localhost:8000/api/v1/auth/google/callback",
+        description="Backend OAuth callback URL",
     )
 
     # Email (SMTP)

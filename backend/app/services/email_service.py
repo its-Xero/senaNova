@@ -80,3 +80,36 @@ TalkaNova Help System
         password=settings.smtp_password or None,
         use_tls=settings.smtp_port == 587,
     )
+
+
+async def send_confirmation_email(to_email: str, token: str) -> None:
+    """Send email confirmation link."""
+    if not settings.smtp_host:
+        print(f"[DEV] Confirmation for {to_email}: token={token[:8]}...")
+        return
+    base = settings.frontend_base_url.rstrip("/")
+    link = f"{base}/confirm-email?token={token}"
+    subject = "TalkaNova – Confirm your email"
+    body = f"""Hello,
+
+Thank you for signing up for TalkaNova. Click the link below to confirm your email and activate your account:
+
+{link}
+
+This link expires in {settings.email_confirmation_expire_minutes} minutes.
+If you did not sign up, ignore this email.
+
+— TalkaNova"""
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = settings.smtp_from
+    msg["To"] = to_email
+    msg.attach(MIMEText(body, "plain"))
+    await aiosmtplib.send(
+        msg,
+        hostname=settings.smtp_host,
+        port=settings.smtp_port,
+        username=settings.smtp_user or None,
+        password=settings.smtp_password or None,
+        use_tls=settings.smtp_port == 587,
+    )

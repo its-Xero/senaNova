@@ -21,12 +21,16 @@ import {
   type Room as ApiRoom,
   type P2PSession,
   requestP2PSession,
+  getRoomMembers,
   uploadFile,
   deleteMessage,
   reportMessage,
 } from "../lib/api";
 import { roomOpaqueEncode, roomOpaqueDecode } from "../lib/crypto";
 import P2PChat from "./P2PChat";
+import AuthModal from "./AuthModal";
+import SettingsSidebar from "./SettingsSidebar";
+import { authMe } from "../lib/api";
 
 
 function useIsPc() {
@@ -55,12 +59,14 @@ type Room = ApiRoom;
 export default function Chat() {
   const isPc = useIsPc();
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [activeChat, setActiveChat] = useState<ActiveChat | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [pendingP2P, setPendingP2P] = useState<P2PSession[]>([]);
-  const [usersOnline, setUsersOnline] = useState<string[]>([]);
+  const [usersOnline, setUsersOnline] = useState<{user_id:string; user_name?:string}[]>([]);
   const [showMembers, setShowMembers] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const wsRef = useRef<WebSocket | null>(null);
@@ -105,15 +111,24 @@ export default function Chat() {
   }, [activeChat]);
 
   useEffect(() => {
-    // Check for existing identity
-    const identity = getIdentity();
-    if (!identity.user_name) {
-      // Auto-set guest name instead of prompting
-      const defaultName = `Guest-${identity.user_id.slice(0, 4)}`;
-      setUserName(defaultName);
-    }
-    setProfile(getLocalProfile());
-    loadInitialData();
+    // Try authenticated profile first
+    (async () => {
+      try {
+        const me = await authMe();
+        // set session identity
+        try { sessionStorage.setItem("talkanova_identity", JSON.stringify({ user_id: me.id, user_name: me.display_name || me.email.split("@")[0] })); } catch {}
+        setProfile({ id: me.id, user_name: me.display_name || me.email.split("@")[0], email: me.email, pfp_url: null, created_at: new Date().toISOString() });
+      } catch {
+        // Fallback to ephemeral identity
+        const identity = getIdentity();
+        if (!identity.user_name) {
+          const defaultName = `Guest-${identity.user_id.slice(0, 4)}`;
+          setUserName(defaultName);
+        }
+        setProfile(getLocalProfile());
+      }
+      loadInitialData();
+    })();
   }, [loadInitialData]);
 
   // handleNameSubmit removed
@@ -168,14 +183,14 @@ export default function Chat() {
               ]);
             }
             if (data.type === "room_users" && data.users) {
-              // Initial user list for presence
-              setUsersOnline(data.users.map((u: { user_id: string }) => u.user_id));
+              // Initial user list for presence (array of {user_id, user_name})
+              setUsersOnline(data.users.map((u: { user_id: string; user_name?: string }) => ({ user_id: u.user_id, user_name: u.user_name })));
             }
             if (data.type === "presence" && data.event === "join") {
-              setUsersOnline((prev) => (prev.includes(data.user_id) ? prev : [...prev, data.user_id]));
+              setUsersOnline((prev) => (prev.some(p => p.user_id === data.user_id) ? prev : [...prev, { user_id: data.user_id, user_name: data.user_name }]));
             }
             if (data.type === "presence" && data.event === "leave") {
-              setUsersOnline((prev) => prev.filter((id) => id !== data.user_id));
+              setUsersOnline((prev) => prev.filter((p) => p.user_id !== data.user_id));
             }
           } catch { }
         };
@@ -242,7 +257,16 @@ export default function Chat() {
   };
 
   const ShowThem = () => {
-    setShowMembers((prev) => !prev);
+    (async () => {
+      const newVal = !showMembers;
+      if (newVal && activeChat?.roomId) {
+        try {
+          const members = await getRoomMembers(activeChat.roomId);
+          setUsersOnline(members.map((m: any) => ({ user_id: m.user_id, user_name: m.user_name })));
+        } catch { /* ignore */ }
+      }
+      setShowMembers(newVal);
+    })();
   };
 
   const [newRoomName, setNewRoomName] = useState("");
@@ -314,16 +338,16 @@ export default function Chat() {
         ))}
 
       {/* Online Users Section */}
-      <p className="text-[#33A1E0] text-xs font-bold p-1 ml-2 mt-4">Online Users ({usersOnline.length})</p>
+      <p className="text-[#33A1E0] text-xs font-bold p-1 ml-2">Online Users ({usersOnline.length})</p>
       {usersOnline
-        .filter(u => u !== profile?.id && u.toLowerCase().includes(searchQuery.toLowerCase()))
-        .map(userId => (
-          <div key={userId} className="room w-full py-2 border-b border-[#33A1E040] flex items-center justify-between px-2">
-            <p className="text-white text-sm truncate w-[60%]">Use {userId.slice(0, 8)}</p>
+        .filter(u => u.user_id !== profile?.id && ((u.user_name || u.user_id).toLowerCase().includes(searchQuery.toLowerCase())))
+        .map(u => (
+          <div key={u.user_id} className="room w-full py-2 border-b border-[#33A1E040] flex items-center justify-between px-2">
+            <p className="text-white text-sm truncate w-[60%]">{u.user_name || u.user_id.slice(0, 8)}</p>
             <button
               onClick={async () => {
                 try {
-                  await requestP2PSession(userId);
+                  await requestP2PSession(u.user_id);
                   alert("P2P Request Sent!");
                 } catch (e) { alert("Failed to send request"); }
               }}
@@ -387,6 +411,9 @@ export default function Chat() {
                   {profile?.email}
                 </p>
               </div>
+            </div>
+            <div className="auth_buttons p-2 flex gap-2">
+              <button onClick={() => setShowAuthModal(true)} className="px-3 py-1 bg-[#33A1E0] rounded text-black text-sm">Account</button>
             </div>
           </div>
         )}
@@ -504,10 +531,14 @@ export default function Chat() {
             >Reset Identity</button>
           </div>
         </div>
+          <AuthModal visible={showAuthModal} onClose={() => setShowAuthModal(false)} onAuthSuccess={(me) => {
+            setProfile({ id: me.id, user_name: me.display_name || me.email.split("@")[0], email: me.email, pfp_url: null, created_at: new Date().toISOString() });
+          }} />
       </div>
 
       <div className={`bar row-start-1 border-1 border-[#33A1E040] border-l-0 bg-transparent flex flex-row items-center justify-between ${showMembers ? "col-span-3 col-start-2" : "col-span-4 col-start-2"}`}>
         <h1 className="h-full flex flex-end justify-center items-center text-4xl text-[#33A1E0] ml-2">TalkaNova</h1>
+        <button onClick={() => setShowSettings(true)} className="settings w-12 h-12 bg-no-repeat bg-[url('/settings.svg')] bg-center bg-contain cursor-pointer flex justify-end items-center mr-2"></button>
         <button onClick={ShowThem} className="members w-12 h-12 bg-no-repeat bg-[url('/members.svg')] bg-center bg-contain cursor-pointer flex justify-end items-center mr-2"></button>
       </div>
 
@@ -577,10 +608,15 @@ export default function Chat() {
       {showMembers && (
         <div className="members col-start-5 row-start-1 row-span-10 border-1 border-[#33A1E040] flex flex-col p-2">
           {/* room members list */}
-          <p className="text-green-400">Online Users:</p>
-          {usersOnline.map(id => <div key={id} className="text-[#33A1E0] text-sm">User {id.slice(0, 8)}...</div>)}
+          <div className="flex items-center justify-between">
+            <p className="text-green-400">Online Users:</p>
+            <button onClick={async () => { if (activeChat?.roomId) { try { const members = await getRoomMembers(activeChat.roomId); setUsersOnline(members.map((m:any)=>({user_id:m.user_id,user_name:m.user_name}))); } catch {} } }} className="text-xs text-white bg-[#0b2432] px-2 py-1 rounded">Refresh</button>
+          </div>
+          {usersOnline.map(u => <div key={u.user_id} className="text-[#33A1E0] text-sm">{u.user_name || `User ${u.user_id.slice(0,8)}...`}</div>)}
         </div>
       )}
+
+      <SettingsSidebar visible={showSettings} onClose={() => setShowSettings(false)} />
     </div>
   );
 }

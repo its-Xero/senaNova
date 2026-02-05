@@ -46,6 +46,7 @@ class P2PSessionResponse(BaseModel):
     peer_ip: Optional[str] = None
     sdp_offer: Optional[dict] = None
     sdp_answer: Optional[dict] = None
+    ice_candidates: Optional[List[dict]] = None
 
 
 # --- In-Memory Store ---
@@ -61,7 +62,9 @@ class Session:
         self.initiator_ip: str | None = None
         self.target_ip: str | None = None
         self.sdp_offer: dict | None = None
+        self.offer_from: str | None = None
         self.sdp_answer: dict | None = None
+        self.answer_from: str | None = None
         self.ice_candidates: list = []
         self.created_at = datetime.utcnow()
         self.expires = datetime.utcnow() + timedelta(minutes=30)
@@ -203,16 +206,29 @@ async def get_session_status(
     session = _sessions.get(session_id)
     if not session:
         raise HTTPException(404, "Session not found")
-    
     user_id = x_user_id or ""
-    
+
     # Determine peer IP for this user
     peer_ip = None
     if user_id == session.initiator_id:
         peer_ip = session.target_ip
     elif user_id == session.target_id:
         peer_ip = session.initiator_ip
-    
+
+    # Provide ICE candidates from the *other* peer only
+    other_candidates = []
+    for c in session.ice_candidates:
+        if c.get("from") and c.get("from") != user_id:
+            other_candidates.append(c)
+
+    # Only expose SDP from the remote peer (don't echo your own SDP back)
+    sdp_offer = None
+    sdp_answer = None
+    if session.sdp_offer and session.offer_from and session.offer_from != user_id:
+        sdp_offer = session.sdp_offer
+    if session.sdp_answer and session.answer_from and session.answer_from != user_id:
+        sdp_answer = session.sdp_answer
+
     return P2PSessionResponse(
         session_id=session.id,
         initiator_id=session.initiator_id,
@@ -221,8 +237,9 @@ async def get_session_status(
         created_at=session.created_at,
         initiator_name=session.initiator_name,
         peer_ip=peer_ip,
-        sdp_offer=session.sdp_offer,
-        sdp_answer=session.sdp_answer,
+        sdp_offer=sdp_offer,
+        sdp_answer=sdp_answer,
+        ice_candidates=other_candidates or None,
     )
 
 
@@ -248,33 +265,53 @@ class SignalICE(BaseModel):
 
 
 @router.post("/signal/offer")
-async def signal_offer(data: SignalOffer):
+async def signal_offer(data: SignalOffer, x_user_id: Optional[str] = Header(None)):
+    sender = get_user_id(x_user_id, None)
     session = _sessions.get(data.session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+    # only participants can send signaling
+    if sender not in (session.initiator_id, session.target_id):
+        raise HTTPException(403, "Not a participant")
     session.sdp_offer = {"sdp": data.sdp, "type": data.type}
+    session.offer_from = sender
+    # move to connecting when offer received
+    session.status = "connecting"
     return {"status": "ok"}
 
 
 @router.post("/signal/answer")
-async def signal_answer(data: SignalAnswer):
+async def signal_answer(data: SignalAnswer, x_user_id: Optional[str] = Header(None)):
+    sender = get_user_id(x_user_id, None)
     session = _sessions.get(data.session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+    if sender not in (session.initiator_id, session.target_id):
+        raise HTTPException(403, "Not a participant")
     session.sdp_answer = {"sdp": data.sdp, "type": data.type}
+    session.answer_from = sender
     session.status = "connected"
     return {"status": "ok"}
 
 
 @router.post("/signal/ice")
-async def signal_ice(data: SignalICE):
+async def signal_ice(data: SignalICE, x_user_id: Optional[str] = Header(None)):
+    # determine sender via header if provided
+    # caller identity not provided in body; use header parsing pattern
+    from fastapi import Header
+    # we cannot read header here directly; rely on get_user_id from headers in request context
+    # but simpler: allow optional 'user_id' in body for now
     session = _sessions.get(data.session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+    # store candidate with sender placeholder (caller should include X-User-ID header)
+    # retrieve sender id from environment where possible
+    sender = get_user_id(x_user_id, None)
     session.ice_candidates.append({
         "candidate": data.candidate,
         "sdpMid": data.sdp_mid,
-        "sdpMLineIndex": data.sdp_m_line_index
+        "sdpMLineIndex": data.sdp_m_line_index,
+        "from": sender,
     })
     return {"status": "ok"}
 

@@ -13,7 +13,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.config import get_settings
 from app.database import init_db
-from app.routers import ws_general, p2p, rooms, messages, reports, help, files
+from app.routers import ws_general, p2p, rooms, messages, reports, help, files, auth
 
 settings = get_settings()
 limiter = Limiter(key_func=get_remote_address)
@@ -59,6 +59,9 @@ app.include_router(messages.router, prefix=settings.api_prefix)
 app.include_router(reports.router, prefix=settings.api_prefix)
 app.include_router(help.router, prefix=settings.api_prefix)
 app.include_router(files.router, prefix=settings.api_prefix)
+
+# Auth
+app.include_router(auth.router, prefix=settings.api_prefix)
 
 # P2P signaling
 app.include_router(p2p.router, prefix=settings.api_prefix)
